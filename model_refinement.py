@@ -11,9 +11,10 @@ from chroma import Chroma
 from chroma.layers.structure.rmsd import CrossRMSD
 
 from src.plots import plot_metric, save_trajectory, plot_rmsd_ca_vs_completeness
-from src.cif_utils import ma_cif_to_X
+from src.utils import ma_cif_to_X
 from src.fft import ifft_density
 from src.pbe_solvers import RealisticSolver
+from src.profile import Profile
 
 
 def main(args):
@@ -111,6 +112,7 @@ def main(args):
     V_d = torch.zeros_like(Z)
     V_s = torch.zeros_like(Z)
     V_c = torch.zeros_like(Z)
+    V_p = torch.zeros_like(Z)
     
     def sample_chi(X, t=0):
         print("Sampling side chain angles")
@@ -383,6 +385,7 @@ if __name__ == "__main__":
     # required parameters
     parser.add_argument('--outdir', type=str, required=True, help="Path to output directory.")
     parser.add_argument('--mrc', type=str, required=True, help="Path to density map in the MRC file.")
+    parser.add_argument('--dat', type=str, required=True, help="Path to the SAXS data file.")
     parser.add_argument('--ma-cif', type=str, required=True, help="Path to incomplete model (e.g., ModelAngelo output), in the CIF format.")
     parser.add_argument('--cif', type=str, required=True, help="Path to deposited CIF file.")
 
@@ -404,6 +407,8 @@ if __name__ == "__main__":
     parser.add_argument('--rho-sequence', type=float, default=0.9, help="Momentum for the sequence loss.")
     parser.add_argument('--lr-inter-ca', type=float, default=0.0, help="Learning rate for the inter-CA loss.")
     parser.add_argument('--rho-inter-ca', type=float, default=0.9, help="Momentum for the inter-CA loss.")
+    parser.add_argument('--lr-profile', type=float, default=1e-2, help="Learning rate for the intensity profile loss.")
+    parser.add_argument('--rho-profile', type=float, default=0.9, help="Momentum for the intensity profile loss.")
     parser.add_argument('--preconditioning-model', type=int, default=1, help="Flag to use preconditioning on the model loss.")
     parser.add_argument('--normalize-detach', type=int, default=0, help="Normalize Fourier map before computing the density loss.")
     parser.add_argument('--de-activate-model', type=int, default=-1, help="Number of epochs before de-activating the model loss (-1 to always activate).")
