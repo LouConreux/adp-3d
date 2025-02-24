@@ -26,14 +26,13 @@ def main(args):
     exp_profiles = read_exp_profile(args.dat)
     if len(exp_profiles) == 0:
         print("No experimental profile found")
-        return
     qmin = exp_profiles[0].min_q_
     qmax = exp_profiles[0].max_q_
     delta_q = exp_profiles[0].delta_q_
     ff_type = FormFactorType.ALL_ATOMS
     profile = compute_profile(particles=particles, min_q=qmin, max_q=qmax, delta_q=delta_q, ff_type=ff_type, gpu=gpu)
-    name = f"{args.pdb.split('/')[-1].split('.')[0]}_profile.png"
-    plot_SAXS_profile(profile, exp_profiles, os.path.join(args.outdir, name))
+    file_name = f"{args.pdb.split('/')[-1].split('.')[0]}_profile.png"
+    plot_SAXS_profile(profile, exp_profiles, os.path.join(args.outdir, file_name))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
