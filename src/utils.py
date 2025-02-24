@@ -31,13 +31,12 @@ def ma_cif_to_X(path, n_residues):
 
     return X, mask.reshape(1, -1, 1, 1)
 
-def read_exp_profile(dat_file, max_q, units):
+def read_exp_profile(dat_file):
     exp_profiles = []
     if not os.path.exists(dat_file):
         print("Can't open file " + dat_file)
         return
-    profile = Profile(file_name=dat_file, fit_file=False, max_q=max_q,
-        units=units, constructor=1)
+    profile = Profile(file_name=dat_file, fit_file=False, constructor=1)
     if profile.size() == 0:
         print("Can't parse input file " + dat_file)
         return
@@ -46,7 +45,7 @@ def read_exp_profile(dat_file, max_q, units):
         print("Profile read from file " + dat_file + " size = " + str(profile.size()))
     return exp_profiles
 
-def X_to_particles_vec(X, S, alternate_alphabet=None):
+def X_to_particles(X, S, alternate_alphabet=None):
     ret = []
     chains = {}
 

@@ -889,15 +889,11 @@ class Profile:
 
         self.sum_partial_profiles(1.0, 0.0, False)
 
-    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS,
-        reciprocal=False, gpu=False):
-        if not reciprocal:
-            if not gpu:
-                self.calculate_profile_real(particles, ff_type)
-            else:
-                self.calculate_profile_real_gpu(particles, ff_type)
+    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS, gpu=False):
+        if not gpu:
+            self.calculate_profile_real(particles, ff_type)
         else:
-            self.calculate_profile_reciprocal(particles, ff_type)
+            self.calculate_profile_real_gpu(particles, ff_type)
 
     def size(self):
         return len(self.q_) if hasattr(self, "q_") else 0
@@ -1139,34 +1135,8 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ft, ff_type,
-    hydration_layer, reciprocal, ab_initio, vacuum, beam_profile_file,
-    gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ft, ff_type, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     # profile = Profile(min_q, max_q, delta_q)
-    if reciprocal:
-        profile.ff_table_ = ft
-    if len(beam_profile_file) > 0:
-        profile.beam_profile_ = beam_profile_file
-
-    """surface_area = []
-    s = SolventAccessibleSurface()
-    average_radius = 0.0
-    if hydration_layer:
-        for particle in particles:
-            radius = ft.get_radius(particle, ff_type)
-            particle.radius = radius
-            average_radius += radius
-        surface_area = s.get_solvent_accessibility(particles)
-        average_radius /= len(particles)
-        profile.average_radius_ = average_radius"""
-
-    if ab_initio:
-        profile.calculate_profile_constant_form_factor(particles, ft)
-    """
-    elif vacuum:
-        profile.calculate_profile_partial(particles, surface_area, ff_type)
-        profile.sum_partial_profiles(0.0, 0.0)
-    """
-    profile.calculate_profile(particles, ff_type, reciprocal, gpu)
+    profile.calculate_profile(particles, ff_type, gpu)
     return profile
