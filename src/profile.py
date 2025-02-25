@@ -909,7 +909,7 @@ def get_distance(vector1, vector2):
     array2 = np.array(vector2)
 
     # Calculate the squared distance
-    dist = np.sum(array1 - array2)
+    dist = np.sqrt(np.sum((array1 - array2) ** 2))
 
     return dist
 
