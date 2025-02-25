@@ -13,6 +13,7 @@ import torch
 from src.structure import get_default_form_factor_table, FormFactorType
 from src.function import SincFunction, ExpFunction, sinc
 from src.distribution import RadialDistributionFunction, get_index_from_distance, get_distance_from_index
+from src.solvent import SolventAccessibleSurface
 
 IMP_SAXS_DELTA_LIMIT = 1.0e-15
 
@@ -889,11 +890,15 @@ class Profile:
 
         self.sum_partial_profiles(1.0, 0.0, False)
 
-    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS, gpu=False):
-        if not gpu:
-            self.calculate_profile_real(particles, ff_type)
+    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS,
+        reciprocal=False, gpu=False):
+        if not reciprocal:
+            if not gpu:
+                self.calculate_profile_real(particles, ff_type)
+            else:
+                self.calculate_profile_real_gpu(particles, ff_type)
         else:
-            self.calculate_profile_real_gpu(particles, ff_type)
+            self.calculate_profile_reciprocal(particles, ff_type)
 
     def size(self):
         return len(self.q_) if hasattr(self, "q_") else 0
@@ -1138,11 +1143,7 @@ def test_mult(x, mult):
 def compute_profile(particles, min_q, max_q, delta_q, ff_type,
     hydration_layer, reciprocal, ab_initio, vacuum, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
-    # profile = Profile(min_q, max_q, delta_q)
-    if reciprocal:
-        profile.ff_table_ = ft
-    if len(beam_profile_file) > 0:
-        profile.beam_profile_ = beam_profile_file
+    ft = profile.ff_table_
 
     surface_area = []
     s = SolventAccessibleSurface()
@@ -1163,11 +1164,5 @@ def compute_profile(particles, min_q, max_q, delta_q, ff_type,
         profile.sum_partial_profiles(0.0, 0.0)
     else:
         profile.calculate_profile(particles, ff_type, reciprocal, gpu)
-    else:
-        if reciprocal:
-            profile.calculate_profile_reciprocal_partial(particles, surface_area, ff_type)
-        else:
-            # default use
-            profile.calculate_profile_partial(particles, surface_area, ff_type)
 
     return profile
