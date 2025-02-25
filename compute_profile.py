@@ -38,13 +38,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # required parameters
-    parser.add_argument('--outdir', type=str, required=True, help="Path to output directory.")
-    parser.add_argument('--dat', type=str, required=True, help="Path to the SAXS data file.")
-    parser.add_argument('--pdb', type=str, required=True, help="Path to deposited PDB file.")
+    parser.add_argument("--outdir", type=str, required=True, help="Path to output directory.")
+    parser.add_argument("--dat", type=str, required=True, help="Path to the SAXS data file.")
+    parser.add_argument("--pdb", type=str, required=True, help="Path to deposited PDB file.")
     parser.add_argument("--explicit_water", help="use waters from input PDB (default = False)", action="store_true")
+    parser.add_argument("--reciprocal", help="compute profile in reciprocal space (default = False)", action="store_true")
     parser.add_argument("--ab_initio", help="compute profile for a bead model with constant form factor (default = False)", action="store_true")
     parser.add_argument("--vacuum", help="compute profile in vacuum (default = False)", action="store_true")
-    parser.add_argument("--hydrogens", "-hyd", help="explicitly consider hydrogens in PDB files (default = False)", action="store_true")
-
+    
     args = parser.parse_args()
     main(args)

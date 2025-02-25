@@ -26,8 +26,8 @@ class Profile:
             self.min_q_ = qmin
             self.max_q_ = qmax
             self.delta_q_ = delta
-            self.c1_ = 1
-            self.c2_ = 1
+            self.c1_ = 10
+            self.c2_ = 10
             self.experimental_ = False
             self.average_radius_ = 1.58
             self.average_volume_ = 17.5
