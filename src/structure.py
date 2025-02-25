@@ -1001,10 +1001,10 @@ class FormFactorTable:
         return self.get_form_factor(p, ff_type)
 
     def get_vacuum_form_factors(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
-        return self.get_vacuum_form_factors(p, ff_type)
+        return self.get_vacuum_form_factor(p, ff_type)
 
     def get_dummy_form_factors(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
-        return self.get_dummy_form_factors(p, ff_type)
+        return self.get_dummy_form_factor(p, ff_type)
 
     def get_water_form_factors(self):
         return self.form_factors_[self.FormFactorAtomType.OH2.value]

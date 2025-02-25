@@ -824,20 +824,21 @@ class Profile:
         print("Start reciprocal profile calculation for", len(particles), "particles")
         self.init()
         coordinates = [particle.coordinates for particle in particles]
+        form_factors = [self.ff_table_.get_form_factors(particle, ff_type) for particle in particles]
         # Iterate over pairs of atoms
         for i in range(len(coordinates)):
-            factors1 = self.ff_table_.get_form_factors(particles[i], ff_type)
+            factor_i = form_factors[i]
             for j in range(i + 1, len(coordinates)):
-                factors2 = self.ff_table_.get_form_factors(particles[j], ff_type)
+                factor_j = form_factors[j]
                 dist = get_distance(coordinates[i], coordinates[j])
                 for k in range(self.size()):
                     x = dist * self.q_[k]
                     x = math.sin(math.pi * x) / (math.pi * x)
-                    self.intensity_[k] += 2 * x * factors1[k] * factors2[k]
+                    self.intensity_[k] += 2 * x * factor_i * factor_j
 
             # Add autocorrelation part
             for k in range(self.size()):
-                self.intensity_[k] += factors1[k] * factors1[k]
+                self.intensity_[k] += factor_i* factor_i
 
     def calculate_profile_reciprocal_partial(self, particles, surface, ff_type):
         if ff_type == FormFactorType.CA_ATOMS:
@@ -846,7 +847,7 @@ class Profile:
 
         print("Start partial reciprocal profile calculation for", len(particles), "particles")
 
-        coordinates = particles.coordinates
+        coordinates = [particle.coordinates for particle in particles]
 
         r_size = 3
         if len(surface) == len(particles):
