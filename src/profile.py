@@ -823,8 +823,7 @@ class Profile:
 
         print("Start reciprocal profile calculation for", len(particles), "particles")
         self.init()
-        coordinates = particles.coordinates
-
+        coordinates = [particle.coordinates for particle in particles]
         # Iterate over pairs of atoms
         for i in range(len(coordinates)):
             factors1 = self.ff_table_.get_form_factors(particles[i], ff_type)
