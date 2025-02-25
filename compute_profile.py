@@ -8,6 +8,7 @@ from src.plots import plot_SAXS_profile
 from src.profile import compute_profile
 from src.structure import FormFactorType
 from src.utils import X_to_particles, read_exp_profile
+from src.score import ChiScore
 
 
 def main(args):
@@ -30,9 +31,11 @@ def main(args):
     qmax = exp_profile.max_q_
     delta_q = exp_profile.delta_q_
     ff_type = FormFactorType.ALL_ATOMS    
-    profile = compute_profile(particles=particles, min_q=qmin, max_q=qmax, delta_q=delta_q, ff_type=ff_type, hydration_layer=not args.explicit_water, reciprocal=args.reciprocal, ab_initio=args.ab_initio, vacuum=args.vacuum, gpu=gpu)
+    profile = compute_profile(particles=particles, min_q=qmin, max_q=qmax, delta_q=delta_q, ff_type=ff_type, hydration_layer=not args.explicit_water, gpu=gpu)
+    scoring_function = ChiScore()
+    chi_square, fit_profile = scoring_function.compute_score(exp_profile, profile, use_offset=False)
     file_name = f"{args.pdb.split('/')[-1].split('.')[0]}_profile.png"
-    plot_SAXS_profile(profile, exp_profile, os.path.join(args.outdir, file_name))
+    plot_SAXS_profile(fit_profile, exp_profile, chi_square, os.path.join(args.outdir, file_name))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -42,9 +45,6 @@ if __name__ == "__main__":
     parser.add_argument("--dat", type=str, required=True, help="Path to the SAXS data file.")
     parser.add_argument("--pdb", type=str, required=True, help="Path to deposited PDB file.")
     parser.add_argument("--explicit_water", help="use waters from input PDB (default = False)", action="store_true")
-    parser.add_argument("--reciprocal", help="compute profile in reciprocal space (default = False)", action="store_true")
-    parser.add_argument("--ab_initio", help="compute profile for a bead model with constant form factor (default = False)", action="store_true")
-    parser.add_argument("--vacuum", help="compute profile in vacuum (default = False)", action="store_true")
     
     args = parser.parse_args()
     main(args)

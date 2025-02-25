@@ -1140,8 +1140,7 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ff_type,
-    hydration_layer, reciprocal, ab_initio, vacuum, gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ff_type, hydration_layer, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     ft = profile.ff_table_
 
@@ -1157,12 +1156,6 @@ def compute_profile(particles, min_q, max_q, delta_q, ff_type,
         average_radius /= len(particles)
         profile.average_radius_ = average_radius
 
-    if ab_initio:
-        profile.calculate_profile_constant_form_factor(particles, ft)
-    elif vacuum:
         profile.calculate_profile_partial(particles, surface_area, ff_type)
-        profile.sum_partial_profiles(0.0, 0.0)
-    else:
-        profile.calculate_profile(particles, ff_type, reciprocal, gpu)
 
     return profile
