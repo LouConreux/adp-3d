@@ -10,9 +10,9 @@ import numpy as np
 from numba import jit
 import torch
 
-from structure import get_default_form_factor_table, FormFactorType
-from function import SincFunction, ExpFunction, sinc
-from distribution import RadialDistributionFunction, get_index_from_distance, get_distance_from_index
+from src.structure import get_default_form_factor_table, FormFactorType
+from src.function import SincFunction, ExpFunction, sinc
+from src.distribution import RadialDistributionFunction, get_index_from_distance, get_distance_from_index
 
 IMP_SAXS_DELTA_LIMIT = 1.0e-15
 
@@ -1135,8 +1135,39 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ft, ff_type, gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ff_type,
+    hydration_layer, reciprocal, ab_initio, vacuum, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     # profile = Profile(min_q, max_q, delta_q)
-    profile.calculate_profile(particles, ff_type, gpu)
+    if reciprocal:
+        profile.ff_table_ = ft
+    if len(beam_profile_file) > 0:
+        profile.beam_profile_ = beam_profile_file
+
+    surface_area = []
+    s = SolventAccessibleSurface()
+    average_radius = 0.0
+    if hydration_layer:
+        for particle in particles:
+            radius = ft.get_radius(particle, ff_type)
+            particle.radius = radius
+            average_radius += radius
+        surface_area = s.get_solvent_accessibility(particles)
+        average_radius /= len(particles)
+        profile.average_radius_ = average_radius
+
+    if ab_initio:
+        profile.calculate_profile_constant_form_factor(particles, ft)
+    elif vacuum:
+        profile.calculate_profile_partial(particles, surface_area, ff_type)
+        profile.sum_partial_profiles(0.0, 0.0)
+    else:
+        profile.calculate_profile(particles, ff_type, reciprocal, gpu)
+    else:
+        if reciprocal:
+            profile.calculate_profile_reciprocal_partial(particles, surface_area, ff_type)
+        else:
+            # default use
+            profile.calculate_profile_partial(particles, surface_area, ff_type)
+
     return profile

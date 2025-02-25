@@ -2,8 +2,8 @@ import os
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 import numpy as np
 import torch
-from profile import Profile
-from structure import Atom, Residue, Chain, get_atom_type_exists, add_atom_type
+from src.profile import Profile
+from src.structure import Atom, Residue, Chain, get_atom_type_exists, add_atom_type
 from chroma import constants
 import chroma.utility.polyseq as polyseq
 
@@ -32,31 +32,30 @@ def ma_cif_to_X(path, n_residues):
     return X, mask.reshape(1, -1, 1, 1)
 
 def read_exp_profile(dat_file):
-    exp_profiles = []
     if not os.path.exists(dat_file):
         print("Can't open file " + dat_file)
         return
-    profile = Profile(file_name=dat_file, fit_file=False, constructor=1)
-    if profile.size() == 0:
+    exp_profile = Profile(file_name=dat_file, fit_file=False, constructor=1)
+    if exp_profile.size() == 0:
         print("Can't parse input file " + dat_file)
         return
     else:
-        exp_profiles.append(profile)
-        print("Profile read from file " + dat_file + " size = " + str(profile.size()))
-    return exp_profiles
+        print("Profile read from file " + dat_file + " size = " + str(exp_profile.size()))        
+    return exp_profile
 
-def X_to_particles(X, S, alternate_alphabet=None):
-    ret = []
+def X_to_particles(X, C, S, alternate_alphabet=None):
+    particles = []
     chains = {}
 
     alphabet = constants.AA20 if alternate_alphabet is None else alternate_alphabet
     all_atom = X.shape[2] == 14
+    print(f"All-atom ? {all_atom}")
 
-    assert X.shape[0] == 1
-    assert C.shape[0] == 1
-    assert S.shape[0] == 1
-    assert X.shape[1] == S.shape[1]
-    assert C.shape[1] == C.shape[1]
+    print(X.shape[0] == 1)
+    print(C.shape[0] == 1)
+    print(S.shape[0] == 1)
+    print(X.shape[1] == S.shape[1])
+    print(C.shape[1] == C.shape[1])
 
     X, C, S = [T.squeeze(0).cpu().data.numpy() for T in [X, C, S]]
 
@@ -65,17 +64,18 @@ def X_to_particles(X, S, alternate_alphabet=None):
     for i, chain_id in enumerate(np.unique(chain_ids)):
         if chain_id == 0:
             continue
-
+        print(f"Chain ID: {chain_id}")
         chain_bool = chain_ids == chain_id
         X_chain = X[chain_bool, :, :].tolist()
         C_chain = C[chain_bool].tolist()
         S_chain = S[chain_bool].tolist()
 
-        chain = Chain(name=chr(65 + i))
+        chain = Chain(chain_id=chr(65 + i))
         chains[chain_id] = chain
 
         for res_ix, (X_i, C_i, S_i) in enumerate(zip(X_chain, C_chain, S_chain)):
             resname = polyseq.to_triple(alphabet[int(S_i)])
+            print(f"Residue {res_ix}: {resname}")
             residue = Residue(residue_type=resname, index=res_ix + 1)
             chain.residues.append(residue)
 
@@ -88,10 +88,12 @@ def X_to_particles(X, S, alternate_alphabet=None):
                     )
 
                 for atom_ix, atom_name in enumerate(atom_names):
+                    print(f"Atom {atom_ix}: {atom_name}")
                     x, y, z = X_i[atom_ix]
+                    print(f"Coordinates {atom_name}: {(x,y,z)}")
                     atom = Atom(name=atom_name, type=atom_name[0], atom_index=atom_ix, coord=(x, y, z))
                     residue.add_child(atom)
                     atom.residue = residue
-                    ret.append(atom)
+                    particles.append(atom)
 
-    return [ret]
+    return particles
