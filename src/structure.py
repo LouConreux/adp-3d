@@ -879,7 +879,7 @@ class FormFactorTable:
         self.form_factor_type_key_ = "form_factor_type_key"
 
 
-    def get_form_factor(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
+    def get_form_factor_gen(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
         if ff_type in (FormFactorType.CA_ATOMS, FormFactorType.RESIDUES):  # residue level form factors
             residue_type = p.residue.residue_type
             return self.get_form_factor_r(residue_type)
@@ -996,6 +996,9 @@ class FormFactorTable:
 
     def get_dummy_water_form_factor(self):
         return self.dummy_zero_form_factors_[self.FormFactorAtomType.OH2.value]
+
+    def get_form_factors(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
+        return self.get_form_factors_gen(p, ff_type)
 
     def get_vacuum_form_factors(self, p, ff_type=FormFactorType.HEAVY_ATOMS):
         return self.get_vacuum_form_factors(p, ff_type)
