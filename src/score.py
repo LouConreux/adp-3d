@@ -28,7 +28,7 @@ class ChiScore:
 
         chi_square /= profile_size
 
-        fit_profile = model_profile.copy()
+        fit_profile = model_profile
         fit_profile.intensity_ *= c 
         return chi_square, fit_profile
 

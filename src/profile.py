@@ -890,15 +890,11 @@ class Profile:
 
         self.sum_partial_profiles(1.0, 0.0, False)
 
-    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS,
-        reciprocal=False, gpu=False):
-        if not reciprocal:
-            if not gpu:
-                self.calculate_profile_real(particles, ff_type)
-            else:
-                self.calculate_profile_real_gpu(particles, ff_type)
+    def calculate_profile(self, particles, ff_type=FormFactorType.HEAVY_ATOMS, gpu=False):
+        if not gpu:
+            self.calculate_profile_real(particles, ff_type)
         else:
-            self.calculate_profile_reciprocal(particles, ff_type)
+            self.calculate_profile_real_gpu(particles, ff_type)
 
     def size(self):
         return len(self.q_) if hasattr(self, "q_") else 0
@@ -1140,7 +1136,7 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ff_type, hydration_layer, gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ff_type, hydration_layer=False, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     ft = profile.ff_table_
 
@@ -1155,7 +1151,8 @@ def compute_profile(particles, min_q, max_q, delta_q, ff_type, hydration_layer, 
         surface_area = s.get_solvent_accessibility(particles)
         average_radius /= len(particles)
         profile.average_radius_ = average_radius
-
         profile.calculate_profile_partial(particles, surface_area, ff_type)
+    else:
+        profile.calculate_profile(particles, ff_type, gpu)
 
     return profile
