@@ -927,9 +927,6 @@ class ProfileFitter:
     def get_profile(self):
         return self.exp_profile_
 
-    def resample(self, model_profile, resampled_profile):
-        model_profile.resample(self.exp_profile_, resampled_profile)
-
     def search_fit_parameters(self, partial_profile, min_c1, max_c1, min_c2,
         max_c2, use_offset, old_chi):
         c1_cells = 10
@@ -1020,7 +1017,7 @@ def get_distance(vector1, vector2):
     array1 = np.array(vector1)
     array2 = np.array(vector2)
 
-    # Calculate the squared distance
+    # Calculate the distance
     dist = np.sqrt(np.sum((array1 - array2) ** 2))
 
     return dist
@@ -1035,7 +1032,6 @@ def get_squared_distance(vector1, vector2):
 
     return squared_dist
 
-@jit(nopython=True, cache=True)
 def inner_resample(q_rs, intensity_rs, pp_rs, exp_q, q_, intensity_, max_q_,
     name_, pp_):
     # Initialize
@@ -1089,8 +1085,6 @@ def inner_resample(q_rs, intensity_rs, pp_rs, exp_q, q_, intensity_, max_q_,
 
     return q_rs, intensity_rs, pp_rs
 
-
-@jit(nopython=True, cache=True)
 def inner_calculate_profile_real(coordinates, form_factors, one_over_bin_size):
     # iterate over pairs of atoms
     distribution = np.zeros(1)
@@ -1112,7 +1106,6 @@ def inner_calculate_profile_real(coordinates, form_factors, one_over_bin_size):
 
     return distribution
 
-@jit(nopython=True, cache=True)
 def inner_calculate_profile_partial(coordinates, vacuum_ff, dummy_ff, water_ff,
     r_size, one_over_bin_size):
     # iterate over pairs of atoms
@@ -1158,7 +1151,6 @@ def inner_calculate_profile_partial(coordinates, vacuum_ff, dummy_ff, water_ff,
         distributions[5][0] += 2*np.sum(water_ff*dummy_ff)
 
     return distributions
-
 
 def inner_calculate_profile_real_gpu(coordinates, form_factors, one_over_bin_size):
     # iterate over pairs of atoms
@@ -1216,7 +1208,6 @@ def inner_calculate_profile_real_gpu(coordinates, form_factors, one_over_bin_siz
     return distribution_cpu
 
 
-@jit(nopython=True, cache=True)
 def assign_vals(distribution, dists, prods, one_over_bin_size):
     max_val = int(dists.max()*one_over_bin_size+0.5)
 
@@ -1227,7 +1218,6 @@ def assign_vals(distribution, dists, prods, one_over_bin_size):
     for k in range(dists.size):
         distribution[int(dists[k]*one_over_bin_size+0.5)] += prods[k]
 
-@jit(nopython=True, cache=True)
 def set_dist_vals(distribution, dists, prods):
     for k in range(dists.size):
         distribution[dists[k]] += prods[k]
@@ -1247,7 +1237,6 @@ def set_dist_vals(distribution, dists, prods):
 #     'test_kernel'
 #     )
 
-@jit(nopython=True, cache=True)
 def test_mult(x, mult):
     return np.multiply(x, mult)
 
