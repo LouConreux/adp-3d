@@ -151,6 +151,6 @@ def plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, name):
     plt.ylabel('log(I(q))')
     plt.legend()
     plt.grid(True)
-    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2: {chi_square:.2f} \n c1 = {fitted_params.c1}, c2 = {fitted_params.c2}')
+    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2: {chi_square:.2f} \n c1 = {fitted_params.c1:.2f}, c2 = {fitted_params.c2:.2f}')
     plt.show()
     plt.savefig(name, bbox_inches='tight')
