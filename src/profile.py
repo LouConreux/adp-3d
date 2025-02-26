@@ -1244,7 +1244,18 @@ def test_mult(x, mult):
 def compute_profile(particles, min_q, max_q, delta_q, ff_type, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     ft = profile.ff_table_
-    profile.calculate_profile(particles, ff_type, gpu)
+    surface_area = []
+    s = SolventAccessibleSurface()
+    average_radius = 0.0
+    for particle in particles:
+        radius = ft.get_radius(particle, ff_type)
+        particle.radius = radius
+        average_radius += radius
+    surface_area = s.get_solvent_accessibility(particles)
+    average_radius /= len(particles)
+    profile.average_radius_ = average_radius
+
+    profile.calculate_profile_partial(particles, surface_area, ff_type)
     return profile
 
 def fit_profile(exp_profile, model_profile, min_c1, max_c1, min_c2, max_c2, use_offset):
