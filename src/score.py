@@ -28,9 +28,7 @@ class ChiScore:
 
         chi_square /= profile_size
 
-        fit_profile = model_profile
-        fit_profile.intensity_ *= c 
-        return chi_square, fit_profile
+        return chi_square
 
     def compute_scale_factor(self, exp_profile, model_profile, offset):
         errors = exp_profile.error_

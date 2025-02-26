@@ -137,11 +137,11 @@ def plot_rmsd_ca_vs_completeness(X_gt, X_ma, X, mask_gt, mask_ma, name):
     plt.show()
     plt.savefig(name, bbox_inches='tight')
 
-def plot_SAXS_profile(profile, exp_profile, chi_square, name):
+def plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, name):
     plt.figure(figsize=(6, 4), dpi=300)
     q_exp = exp_profile.q_
     I_exp = exp_profile.intensity_
-    plt.scatter(q_exp, I_exp, label='Exp. Profile')
+    plt.scatter(q_exp, I_exp, s=0.1, label='Exp. Profile')
     q = profile.q_
     I = profile.intensity_
     plt.plot(q, I, label='Model Profile', color='red')
@@ -151,6 +151,6 @@ def plot_SAXS_profile(profile, exp_profile, chi_square, name):
     plt.ylabel('log(I(q))')
     plt.legend()
     plt.grid(True)
-    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2: {chi_square:.2f}')
+    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2: {chi_square:.2f} \n c1 = {fitted_params.c1}, c2 = {fitted_params.c2}')
     plt.show()
     plt.savefig(name, bbox_inches='tight')

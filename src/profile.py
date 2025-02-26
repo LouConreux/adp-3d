@@ -11,9 +11,10 @@ from numba import jit
 import torch
 
 from src.structure import get_default_form_factor_table, FormFactorType
-from src.function import SincFunction, ExpFunction, sinc
+from src.function import SincFunction, ExpFunction
 from src.distribution import RadialDistributionFunction, get_index_from_distance, get_distance_from_index
 from src.solvent import SolventAccessibleSurface
+from src.score import ChiScore
 
 IMP_SAXS_DELTA_LIMIT = 1.0e-15
 
@@ -899,6 +900,121 @@ class Profile:
     def size(self):
         return len(self.q_) if hasattr(self, "q_") else 0
 
+class FitParameters:
+    def __init__(self, chi_square=0.0, c1=0.0, c2=0.0,
+        c=0.0, o=0.0, default_chi_square=0.0):
+        self.chi_square = chi_square
+        self.c1 = c1
+        self.c2 = c2
+        self.c = c
+        self.o = o
+        self.default_chi_square = default_chi_square
+
+    def __lt__(self, other):
+        return self.chi_square < other.chi_square
+
+class ProfileFitter:
+    def __init__(self, exp_profile):
+        self.exp_profile_ = exp_profile
+        self.scoring_function_ = ChiScore()
+
+    def compute_scale_factor(self, model_profile, offset=0.0):
+        return self.scoring_function_.compute_scale_factor(self.exp_profile_, model_profile, offset)
+
+    def compute_offset(self, model_profile):
+        return self.scoring_function_.compute_offset(self.exp_profile_, model_profile)
+
+    def get_profile(self):
+        return self.exp_profile_
+
+    def resample(self, model_profile, resampled_profile):
+        model_profile.resample(self.exp_profile_, resampled_profile)
+
+    def search_fit_parameters(self, partial_profile, min_c1, max_c1, min_c2,
+        max_c2, use_offset, old_chi):
+        c1_cells = 10
+        c2_cells = 10
+        if old_chi < float('inf') - 1:  # second iteration
+            c1_cells = 5
+            c2_cells = 5
+
+        delta_c1 = (max_c1 - min_c1) / c1_cells
+        delta_c2 = (max_c2 - min_c2) / c2_cells
+
+        last_c1 = False
+        last_c2 = False
+        if delta_c1 < 0.0001:
+            c1_cells = 1
+            delta_c1 = max_c1 - min_c1
+            last_c1 = True
+        if delta_c2 < 0.001:
+            c2_cells = 1
+            delta_c2 = max_c2 - min_c2
+            last_c2 = True
+
+        best_c1 = 1.0
+        best_c2 = 0.0
+        best_chi = old_chi
+        best_set = False
+
+        c1 = min_c1
+        for _ in range(c1_cells + 1):
+            c2 = min_c2
+            for _ in range(c2_cells + 1):
+                partial_profile.sum_partial_profiles(c1, c2)
+                curr_chi, fit_profile = self.compute_score(partial_profile, use_offset)
+                if not best_set or curr_chi < best_chi:
+                    best_set = True
+                    best_chi = curr_chi
+                    best_c1 = c1
+                    best_c2 = c2
+                c2 += delta_c2
+            c1 += delta_c1
+
+        if abs(best_chi - old_chi) > 0.0001 and not (last_c1 and last_c2):
+            min_c1 = max(best_c1 - delta_c1, min_c1)
+            max_c1 = min(best_c1 + delta_c1, max_c1)
+            min_c2 = max(best_c2 - delta_c2, min_c2)
+            max_c2 = min(best_c2 + delta_c2, max_c2)
+            return self.search_fit_parameters(partial_profile, min_c1, max_c1, min_c2, max_c2, use_offset, best_chi)
+        return FitParameters(best_chi, best_c1, best_c2)
+
+    def fit_profile(self, partial_profile, min_c1, max_c1, min_c2, max_c2, use_offset):
+        # Compute chi value for default c1/c2
+        default_c1 = 1.0
+        default_c2 = 0.0
+        partial_profile.sum_partial_profiles(default_c1, default_c2)
+        default_chi, fit_profile = self.compute_score(partial_profile, use_offset)
+
+        fp = self.search_fit_parameters(partial_profile, min_c1, max_c1, min_c2, max_c2, use_offset, float('inf'))
+        best_c1 = fp.c1
+        best_c2 = fp.c2
+        fp.default_chi_square = default_chi
+        # Compute a profile for the best c1/c2 combination
+        partial_profile.sum_partial_profiles(best_c1, best_c2)
+        score, fit_profile = self.compute_score(partial_profile, use_offset)
+        return fit_profile, score, fp
+
+    def compute_score(self, model_profile, use_offset):
+        resampled_profile = Profile(
+            qmin=self.exp_profile_.min_q_,
+            qmax=self.exp_profile_.max_q_,
+            delta=self.exp_profile_.delta_q_,
+            constructor=0
+        )
+        # model_profile and resampled_profile might be different than the C++ version
+        model_profile.resample(self.exp_profile_, resampled_profile)
+        score = self.scoring_function_.compute_score(self.exp_profile_, resampled_profile, use_offset)
+
+        offset = 0.0
+        if use_offset:
+            offset = self.scoring_function_.compute_offset(self.exp_profile_, resampled_profile)
+        c = self.scoring_function_.compute_scale_factor(self.exp_profile_, resampled_profile, offset)
+
+        resampled_profile.intensity_ = resampled_profile.intensity_ * c - offset
+
+        return score, resampled_profile
+
 def get_distance(vector1, vector2):
     # Convert the vectors to NumPy arrays
     array1 = np.array(vector1)
@@ -1136,23 +1252,13 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ff_type, hydration_layer=False, gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ff_type, gpu=False):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     ft = profile.ff_table_
-
-    surface_area = []
-    s = SolventAccessibleSurface()
-    average_radius = 0.0
-    if hydration_layer:
-        for particle in particles:
-            radius = ft.get_radius(particle, ff_type)
-            particle.radius = radius
-            average_radius += radius
-        surface_area = s.get_solvent_accessibility(particles)
-        average_radius /= len(particles)
-        profile.average_radius_ = average_radius
-        profile.calculate_profile_partial(particles, surface_area, ff_type)
-    else:
-        profile.calculate_profile(particles, ff_type, gpu)
-
+    profile.calculate_profile(particles, ff_type, gpu)
     return profile
+
+def fit_profile(exp_profile, model_profile, min_c1, max_c1, min_c2, max_c2, use_offset):
+    fitter = ProfileFitter(exp_profile)
+    fit_profile, chi_square, fp = fitter.fit_profile(model_profile, min_c1, max_c1, min_c2, max_c2, use_offset)
+    return fit_profile, chi_square, fp
