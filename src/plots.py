@@ -141,16 +141,18 @@ def plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, name):
     plt.figure(figsize=(6, 4), dpi=300)
     q_exp = exp_profile.q_
     I_exp = exp_profile.intensity_
+    error_exp = exp_profile.error_
     plt.scatter(q_exp, I_exp, s=0.5, label='Exp. Profile')
+    plt.errorbar(q_exp, I_exp, yerr=error_exp, fmt='none', ecolor='black', alpha=0.5, capsize=1)
     q = profile.q_
     I = profile.intensity_
     plt.plot(q, I, label='Model Profile', color='red')
     plt.yscale('log')
     #plt.ylim([0, np.max(I_exp)*1.1])
-    plt.xlabel('q (\u00c5-1)')
+    plt.xlabel('q (\u00c5⁻¹)')
     plt.ylabel('log(I(q))')
     plt.legend()
     plt.grid(True)
-    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2: {chi_square:.2f} \n c1 = {fitted_params.c1:.2f}, c2 = {fitted_params.c2:.2f}')
+    plt.title(f'SAXS Profile Comparison\n\u03C7\u00B2 = {chi_square:.2f} \n c1 = {fitted_params.c1:.2f}, c2 = {fitted_params.c2:.2f}')
     plt.show()
     plt.savefig(name, bbox_inches='tight')
