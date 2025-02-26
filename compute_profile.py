@@ -30,9 +30,9 @@ def main(args):
     delta_q = exp_profile.delta_q_
     ff_type = FormFactorType.ALL_ATOMS    
     profile = compute_profile(particles=particles, min_q=qmin, max_q=qmax, delta_q=delta_q, ff_type=ff_type, gpu=gpu)
-    fit_profile, chi_square, fitted_params = fit_profile(exp_profile, profile, min_c1=0.99, max_c1=1.05, min_c2=-2.0, max_c2=4.0, use_offset=False)
+    model_profile, chi_square, fitted_params = fit_profile(exp_profile, profile, min_c1=0.99, max_c1=1.05, min_c2=-2.0, max_c2=4.0, use_offset=False)
     file_name = f"{args.pdb.split('/')[-1].split('.')[0]}_profile.png"
-    plot_SAXS_profile(fit_profile, exp_profile, chi_square, fitted_params, os.path.join(args.outdir, file_name))
+    plot_SAXS_profile(model_profile, exp_profile, chi_square, fitted_params, os.path.join(args.outdir, file_name))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
