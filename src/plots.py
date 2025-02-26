@@ -141,7 +141,7 @@ def plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, name):
     plt.figure(figsize=(6, 4), dpi=300)
     q_exp = exp_profile.q_
     I_exp = exp_profile.intensity_
-    plt.scatter(q_exp, I_exp, s=0.1, label='Exp. Profile')
+    plt.scatter(q_exp, I_exp, s=0.5, label='Exp. Profile')
     q = profile.q_
     I = profile.intensity_
     plt.plot(q, I, label='Model Profile', color='red')
