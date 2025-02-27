@@ -1241,7 +1241,7 @@ def test_mult(x, mult):
     return np.multiply(x, mult)
 
 
-def compute_profile(particles, min_q, max_q, delta_q, ff_type, gpu=False):
+def compute_profile(particles, min_q, max_q, delta_q, ff_type):
     profile = Profile(qmin=min_q, qmax=max_q, delta=delta_q, constructor=0)
     ft = profile.ff_table_
     surface_area = []

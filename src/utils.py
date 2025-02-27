@@ -46,16 +46,9 @@ def read_exp_profile(dat_file):
 def X_to_particles(X, C, S, alternate_alphabet=None):
     particles = []
     chains = {}
-
     alphabet = constants.AA20 if alternate_alphabet is None else alternate_alphabet
     all_atom = X.shape[2] == 14
     print(f"All-atom ? {all_atom}")
-
-    print(X.shape[0] == 1)
-    print(C.shape[0] == 1)
-    print(S.shape[0] == 1)
-    print(X.shape[1] == S.shape[1])
-    print(C.shape[1] == C.shape[1])
 
     X, C, S = [T.squeeze(0).cpu().data.numpy() for T in [X, C, S]]
 

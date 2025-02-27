@@ -7,7 +7,7 @@ import torch
 
 KEY_TO_LABEL = {'loss': 'Loss', 'rmsd': 'RMSD', 'lr_density': 'Learning Rate Density', 't': 'Diffusion Time',
                 'loss_d': 'Density Error', 'loss_m': 'Model Error', 'loss_s': 'Sequence Loss',
-                'loss_dist': 'Distance Error', 'rmsd_ca': 'RMSD CA', 'rho_hqs': 'Rho HQS', 'resolution': 'Resolution',
+                'loss_dist': 'Distance Error', 'loss_p': 'Profile Error', 'rmsd_ca': 'RMSD CA', 'rho_hqs': 'Rho HQS', 'resolution': 'Resolution',
                 'sampling_rate': 'Sampling Rate', 'loss_c': 'Inter-CA Loss'}
 KEY_TO_LOG = {'loss': True, 'rmsd': True, 'lr_density': True, 't': False, 'loss_d': False, 'loss_m': True,
               'loss_s': True, 'loss_dist': True, 'rmsd_ca': True, 'rho_hqs': True, 'resolution': False,
@@ -113,19 +113,12 @@ def plot_metric(metrics, key, name):
     plt.savefig(name, bbox_inches='tight')
 
 
-def plot_rmsd_ca_vs_completeness(X_gt, X_ma, X, mask_gt, mask_ma, name):
+def plot_rmsd_ca_vs_completeness(X_gt, X, mask_gt, name):
     n_residues = X.shape[1]
-    completeness_ma = 100. * mask_ma.sum().item() / n_residues
-    
-    distance_sq_ma = ((X_ma[:, mask_gt * mask_ma, 1] - X_gt[:, mask_gt * mask_ma, 1]) ** 2).sum(-1)
-    rmsd_ma = torch.sqrt(distance_sq_ma.mean()).item()
-
     distance_sq = ((X[:, mask_gt, 1] - X_gt[:, mask_gt, 1]) ** 2).sum(-1).cpu().numpy()
     rmsd_sorted = np.sqrt(np.cumsum(np.sort(distance_sq)) / (np.arange(mask_gt.sum().item()) + 1))
     completeness = 100. * np.arange(mask_gt.sum().item()) / n_residues
-
     plt.figure(figsize=(5, 3), dpi=200)
-    plt.plot([completeness_ma], [rmsd_ma], marker='*', color='r', markeredgecolor='k', linestyle='', markersize=20, label='MA')
     plt.plot(completeness, rmsd_sorted, color='teal', label='ADP-3D', linewidth=3)
     plt.xlim(0, 100)
     plt.ylim(0.05, 2. * np.max(rmsd_sorted))
@@ -143,12 +136,11 @@ def plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, name):
     I_exp = exp_profile.intensity_
     error_exp = exp_profile.error_
     plt.scatter(q_exp, I_exp, s=0.5, label='Exp. Profile')
-    plt.errorbar(q_exp, I_exp, yerr=error_exp, fmt='none', ecolor='black', alpha=0.5, capsize=1)
+    plt.errorbar(q_exp, I_exp, yerr=error_exp, fmt='none', elinewidth=0.5, alpha=0.6)
     q = profile.q_
     I = profile.intensity_
     plt.plot(q, I, label='Model Profile', color='red')
     plt.yscale('log')
-    #plt.ylim([0, np.max(I_exp)*1.1])
     plt.xlabel('q (\u00c5⁻¹)')
     plt.ylabel('log(I(q))')
     plt.legend()

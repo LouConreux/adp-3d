@@ -2,19 +2,16 @@ import argparse
 import torch
 import os
 import numpy as np
-from scipy.linalg import svd, inv
 import torch.nn.functional as F
-import mrcfile
 import pickle
 from chroma import Protein
 from chroma import Chroma
 from chroma.layers.structure.rmsd import CrossRMSD
 
-from src.plots import plot_metric, save_trajectory, plot_rmsd_ca_vs_completeness
-from src.utils import ma_cif_to_X
-from src.fft import ifft_density
-from src.pbe_solvers import RealisticSolver
-from src.profile import Profile
+from src.plots import plot_metric, save_trajectory, plot_rmsd_ca_vs_completeness, plot_SAXS_profile
+from src.profile import compute_profile, fit_profile
+from src.structure import FormFactorType
+from src.utils import X_to_particles, read_exp_profile
 
 
 def main(args):
@@ -41,65 +38,25 @@ def main(args):
     def multiply_R_inverse(X, C): return backbone_network.noise_perturb.base_gaussian._multiply_R_inverse(X, C)
     def multiply_covariance(dU, C): return backbone_network.noise_perturb.base_gaussian.multiply_covariance(dU, C)
 
-    print("Initializing PBE solver")
-    protein = Protein.from_CIF(args.cif, device='cuda')
+    print("Initializing Forward SAXS Profile Model")
+    protein = Protein.from_PDB(args.pdb, device='cuda')
     X_gt, C_gt, S_gt = protein.to_XCS(all_atom=False)  # we use X_gt to compute RMSD
     mask_gt = (C_gt == 1)[0]
-    solver = RealisticSolver(
-        args.mrc, S=S_gt, remove_oxt=args.remove_oxt, normalization='constant', resolution=args.resolution, unpad_len=args.unpad_len, outdir=args.outdir
-    )
-    delta = solver.origin
-    X_gt -= delta  # align X_gt with the density
-    density_gt = torch.tensor(solver.density)
-    f_density_gt = ifft_density(density_gt).cuda()
     n_residues = X_gt.shape[1]
-
-    print("Generating full density")
     X_gt_full, C_gt_full, S_gt_full = protein.to_XCS(all_atom=True)
     chi_gt, mask_chi = design_network.X_to_chi(X_gt_full, C_gt_full, S_gt_full)
-    X_gt_full -= delta
-    f_density = solver.get_full_f_density_per_batch(X_gt_full, args.n_voxels_per_batch)  # this density is unnormalized
-    density = torch.abs(ifft_density(f_density)).float().cpu().numpy()
-    
-    print(f"Saving {args.outdir}/{args.outdir.split('/')[-1]}_from_X_gt.mrc")
-    with mrcfile.new(f"{args.outdir}/{args.outdir.split('/')[-1]}_from_X_gt.mrc", overwrite=True) as mrc:
-        mrc.set_data(density)
-    with mrcfile.open(f"{args.outdir}/{args.outdir.split('/')[-1]}_from_X_gt.mrc", mode='r+') as mrc:
-        mrc.voxel_size = solver.voxel_size
-        mrc.header.cella = solver.mrc_header.cella
-        mrc.header.origin = solver.mrc_header.origin
 
-    print("Precomputing preconditioning matrices")
-    try:
-        protein = Protein.from_CIF(args.ma_cif, device='cuda')
-        X_ma, C_ma, _ = protein.to_XCS()
-        mask_ma = C_ma[0].cpu().reshape(-1) > 0.5
-    except ValueError:
-        X_ma, mask_boundaries = ma_cif_to_X(args.ma_cif, X_gt.shape[1])
-        X_ma = X_ma.cuda()
-        mask_ma = mask_boundaries.reshape(-1) > 0.5
-    delta = (X_gt[0, mask_ma * mask_gt.cpu()] - X_ma[0, mask_ma * mask_gt.cpu()]).mean(dim=(0, 1))
-    X_ma += delta  # align the incomplete model on X_gt (which should be aligned with the density)
-    Y = X_ma[:, mask_ma]
-
-    def mR_fun(z):
-        z = z.reshape(-1, n_residues, 4, 3)
-        return multiply_R(z, C_gt.expand(z.shape[0], -1))[:, mask_ma].reshape(z.shape[0], -1).permute(1, 0)
-
-    Z = torch.eye(n_residues * 12).cuda()
-    mR_mat = mR_fun(Z).cpu().numpy()
-
-    U, S, Vh = svd(mR_mat)
-    Um1 = inv(U)
-    Um1 = torch.tensor(Um1).float().cuda()[None].expand(args.population_size, -1, -1)
-    S = torch.tensor(S).float().cuda()
-    Vh = torch.tensor(Vh).float().cuda()[None].expand(args.population_size, -1, -1)
+    print("Computing SAXS profile")
+    exp_profile = read_exp_profile(args.dat)
+    particles = X_to_particles(X_gt_full, C_gt_full, S_gt_full)
+    model_profile = compute_profile(
+        particles=X_to_particles(X_gt_full, C_gt_full, S_gt_full), min_q=exp_profile.min_q_, max_q=exp_profile.max_q_, delta_q=exp_profile.delta_q_, ff_type=FormFactorType.ALL_ATOMS,
+    )
 
     print("Initializing backbone")
     C_gt = torch.abs(C_gt).expand(args.population_size, -1)
     S_gt = S_gt.expand(args.population_size, -1)
     chi_gt = chi_gt.expand(args.population_size, -1, -1)
-    Y = Y.expand(args.population_size, -1, -1, -1)
     if args.init_gt:
         X = torch.clone(X_gt).expand(args.population_size, -1, -1, -1) + args.eps_init
         if args.std_dev_init > 1e-8:
@@ -108,8 +65,6 @@ def main(args):
     else:
         Z = torch.randn(args.population_size, *X_gt.shape[1:]).float().cuda()
         X = multiply_R(Z, C_gt)
-    V_m = torch.zeros_like(Z)
-    V_d = torch.zeros_like(Z)
     V_s = torch.zeros_like(Z)
     V_c = torch.zeros_like(Z)
     V_p = torch.zeros_like(Z)
@@ -145,83 +100,11 @@ def main(args):
             return args.t
         else:
             raise NotImplementedError
-
-    def lr_fn(epoch):
-        return args.lr_density
-
-    def resolution_fn(epoch):
-        if epoch < args.activate_resolution_drop:
-            return args.resolution_cutoff_start
-        else:
-            a = (args.resolution_cutoff_end - args.resolution_cutoff_start) / (args.epochs - args.activate_resolution_drop)
-            b = args.resolution_cutoff_start - args.activate_resolution_drop * a
-            return a * epoch + b
-
-    def sampling_rate_fn(epoch):
-        if args.sampling_rate_schedule == 'constant':
-            return args.sampling_rate_start
-        elif args.sampling_rate_schedule == 'linear':
-            return args.sampling_rate_start + epoch * (args.sampling_rate_end - args.sampling_rate_start) / args.epochs
-        elif args.sampling_rate_schedule == 'exp':
-            return np.exp(np.log(args.sampling_rate_start) + epoch * (np.log(args.sampling_rate_end) - np.log(args.sampling_rate_start)) / args.epochs)
-        else:
-            raise NotImplementedError
     
-    def density_error(d, d_gt, mode='mean'):
-        if mode == 'sum':
-            if args.normalize_detach:
-                norm = torch.linalg.norm(d.reshape(d.shape[0], -1), dim=-1, keepdim=True).detach()
-                norm_gt = torch.linalg.norm(d_gt).detach()
-            else:
-                norm = 4375.0  # hard-coded parameter -- has roughly the same role as the learning rate
-                norm_gt = 1.
-            neg_scalar_prod = (-torch.real(d.reshape(d.shape[0], -1) * d_gt.reshape(1, -1)) / (norm * norm_gt)).sum(-1)
-            return neg_scalar_prod.sum(), neg_scalar_prod.detach()
-        elif mode == 'mean':
-            return (torch.abs(d - d_gt) ** 2).mean(dim=(1, 2, 3)).sum(), (torch.abs(d - d_gt) ** 2).mean(dim=(1, 2, 3)).detach()
-
-    def get_gradient_Z_m(Z, t, epoch):
-        if args.lr_model > 0. and (args.de_activate_model < 0 or epoch < args.de_activate_model):
-            with (torch.enable_grad()):
-                Z.requires_grad_(True)
-                _Z = Z
-                if args.preconditioning_model:
-                    Um1Y = torch.bmm(Um1, Y.reshape(Y.shape[0], -1, 1)).reshape(Y.shape[0], -1)
-                    Sm1Um1Y = Um1Y / S
-                    loss_m = ((torch.bmm(Vh, _Z.reshape(Z.shape[0], -1, 1))[:, :Um1.shape[1], 0] - Sm1Um1Y) ** 2).sum()
-                else:
-                    loss_m = ((multiply_R(_Z, C_gt)[:, mask_ma] - Y) ** 2).sum()
-                loss_m.backward()
-                grad_Z_m = Z.grad
-            Z.requires_grad_(False)
-        else:
-            grad_Z_m = torch.zeros(*Z.shape).float().to(X.device)
-            loss_m = torch.tensor([0.]).float().cuda()
-        return grad_Z_m, loss_m
-
-    def get_gradient_Z_d(Z, chi_sample, t, epoch):
-        if args.lr_density > 0. and epoch >= args.activate_density:
-            with (torch.enable_grad()):
-                Z.requires_grad_(True)
-                _X = multiply_R(Z, C_gt)
-                if args.sample_chi_every > 0 and epoch + 1 % args.sample_chi_every == 0:
-                    if args.use_gt_chi:
-                        chi_sample = chi_gt
-                    else:
-                        chi_sample = sample_chi(_X, t)
-                _X_full, _ = design_network.chi_to_X(_X, C_gt, S_gt, chi_sample)
-                f_density_sampled, f_density_sampled_gt = solver.get_one_batch_f_density(
-                    _X_full, f_density_gt, resolution_fn(epoch), sampling_rate=sampling_rate_fn(epoch)
-                )
-                loss_d, loss_d_per_sample = density_error(f_density_sampled, f_density_sampled_gt, mode='sum')
-                loss_d.backward()
-                grad_Z_d = Z.grad * (resolution_fn(epoch) / args.resolution_cutoff_end)**3 / sampling_rate_fn(epoch)  # scale by epoch-dependent factors 
-            Z.requires_grad_(False)
-        else:
-            grad_Z_d = torch.zeros(*Z.shape).float().to(X.device)
-            loss_d = torch.tensor([0.]).float().cuda()
-            loss_d_per_sample = torch.zeros(Z.shape[0]).float().cuda()
-        return grad_Z_d, loss_d, chi_sample, loss_d_per_sample
+    def profile_error(prof, prof_gt):
+        profile, chi_square, fitted_params = fit_profile(prof_gt, prof, min_c1=0.9, max_c1=1.2, min_c2=-2.0, max_c2=4.0, use_offset=False)
+        chi_square = torch.tensor(chi_square).float().cuda()
+        return chi_square
 
     def get_gradient_Z_s(Z, t, epoch):
         if args.lr_sequence > 0. and epoch >= args.activate_sequence:
@@ -255,12 +138,35 @@ def main(args):
             loss_c = torch.tensor([0.]).float().cuda()
         return grad_Z_c, loss_c
     
+    def get_gradient_Z_p(Z):
+        if args.lr_profile > 0.:
+            with (torch.enable_grad()):
+                Z.requires_grad_(True)
+                _X = multiply_R(Z, C_gt)
+                if args.sample_chi_every > 0 and epoch + 1 % args.sample_chi_every == 0:
+                    if args.use_gt_chi:
+                        chi_sample = chi_gt
+                    else:
+                        chi_sample = sample_chi(_X, t)
+                _X_full, _ = design_network.chi_to_X(_X, C_gt, S_gt, chi_sample)
+                particles = X_to_particles(_X_full, C_gt, S_gt)
+                profile = compute_profile(
+                    particles=particles, min_q=exp_profile.min_q_, max_q=exp_profile.max_q_, delta_q=exp_profile.delta_q_, ff_type=FormFactorType.ALL_ATOMS,
+                )
+                loss_p = profile_error(profile, exp_profile)
+                loss_p.backward()
+                grad_Z_p = Z.grad
+            Z.requires_grad_(False)
+        else:
+            grad_Z_p = torch.zeros(*Z.shape).float().to(X.device)
+            loss_p = torch.tensor([0.]).float().cuda()
+        return grad_Z_p, loss_p
+
     trajectory = [torch.clone(X_gt[:, mask_gt]).detach().cpu().numpy(),
-                  torch.clone(Y[:1]).detach().cpu().numpy(),
                   (torch.clone(X).detach().cpu().numpy(), 'initial state')]
     
     metrics = {'epoch': [], 'rmsd': [], 't': [], 'loss_m': [], 'loss_d': [], 'rmsd_ca': [],
-               'resolution': [], 'loss_s': [], 'lr_density': [], 'loss_d_per_sample': [], 'sampling_rate': [],
+               'resolution': [], 'loss_s': [], 'loss_p': [], 'lr_density': [], 'loss_d_per_sample': [], 'sampling_rate': [],
                'loss_c': []}
 
     print("--- Optimization starts now ---")
@@ -274,26 +180,16 @@ def main(args):
             X0 = X
         Z0 = multiply_R_inverse(X0, C_gt)
 
-        grad_Z_m, loss_m = get_gradient_Z_m(Z0, t, epoch)
-        V_m = args.rho_model * V_m + args.lr_model * grad_Z_m
-
-        grad_Z_d, loss_d, chi_sample, loss_d_per_sample = get_gradient_Z_d(Z0, chi_sample, t, epoch)
-        chi_sample = torch.clone(chi_sample).detach() if chi_sample is not None else None
-        V_d = args.rho_density * V_d + lr_fn(epoch) * grad_Z_d
-
         grad_Z_s, loss_s = get_gradient_Z_s(Z0, t, epoch)
         V_s = args.rho_sequence * V_s + args.lr_sequence * grad_Z_s
 
         grad_Z_c, loss_c = get_gradient_Z_c(Z0)
         V_c = args.rho_inter_ca * V_c + args.lr_inter_ca * grad_Z_c
 
-        Z0 = Z0 - V_m - V_d - V_s - V_c
+        grad_Z_p, loss_p = get_gradient_Z_p(Z0)
+        V_p = args.rho_profile * V_p + args.lr_profile * grad_Z_p
 
-        # replicate models with lowest density error
-        if args.select_best_every > 0 and epoch >= args.activate_replication and epoch % args.select_best_every == 0:
-            assert Z0.shape[0] % args.replication_factor == 0, "The population size must be an integer multiple of the replication factor"
-            _, indices = torch.topk(loss_d_per_sample, Z0.shape[0] // args.replication_factor, largest=False)
-            Z0 = torch.clone(Z0[indices][:, None].expand(-1, args.replication_factor, -1, -1, -1)).reshape(-1, *Z0.shape[1:])
+        Z0 = Z0 - V_s - V_c - V_p
 
         if args.use_diffusion:
             tm1 = torch.tensor(t_fn(epoch + 1)).float().cuda()
@@ -331,18 +227,13 @@ def main(args):
 
             metrics['epoch'].append(epoch)
             metrics['t'].append(t.item())
-            metrics['loss_m'].append(loss_m.item())
-            metrics['loss_d'].append(loss_d.item())
-            metrics['loss_d_per_sample'].append(loss_d_per_sample)
             metrics['loss_s'].append(loss_s.item())
             metrics['loss_c'].append(loss_c.item())
-            metrics['resolution'].append(resolution_fn(epoch))
-            metrics['sampling_rate'].append(sampling_rate_fn(epoch))
-            metrics['lr_density'].append(lr_fn(epoch))
+            metrics['loss_p'].append(loss_p.item())
             metrics['rmsd'].append(rmsds)
             metrics['rmsd_ca'].append(rmsds_cas)
             trajectory.append((torch.clone(X[idx_best][None]).detach().cpu().numpy(), 'x-update'))
-            print(f"Epoch {epoch + 1}/{args.epochs}, Loss Model: {loss_m.item():.4e}, Loss Density: {loss_d.item():.4e}, RMSD: {rmsd_best:.2e}, RMSD CA: {rmsd_ca_best:.2e}")
+            print(f"Epoch {epoch + 1}/{args.epochs}, Loss Profile: {loss_p.item():.4e}, RMSD: {rmsd_best:.2e}, RMSD CA: {rmsd_ca_best:.2e}")
 
     C_gt = C_gt[0:1]
     S_gt = S_gt[0:1]
@@ -352,19 +243,7 @@ def main(args):
     with open(f"{args.outdir}/metrics.pkl", 'wb') as file:
         pickle.dump(metrics, file)
 
-    print(f"Saving {args.outdir}/{args.outdir.split('/')[-1]}.mrc")
-    f_density = solver.get_full_f_density_per_batch(X_full, args.n_voxels_per_batch)
-    density = torch.real(ifft_density(f_density))
-    density = density.cpu().numpy()
-    with mrcfile.new(f"{args.outdir}/{args.outdir.split('/')[-1]}.mrc", overwrite=True) as mrc:
-        mrc.set_data(density)
-    with mrcfile.open(f"{args.outdir}/{args.outdir.split('/')[-1]}.mrc", mode='r+') as mrc:
-        mrc.voxel_size = solver.voxel_size
-        mrc.header.cella = solver.mrc_header.cella
-        mrc.header.origin = solver.mrc_header.origin
-
     print(f"Saving {args.outdir}/{args.outdir.split('/')[-1]}.pdb")
-    X_full += solver.origin
     protein_out = Protein.from_XCS(X_full, C_gt, S_gt)
     protein_out.to_PDB(f"{args.outdir}/{args.outdir.split('/')[-1]}.pdb")
 
@@ -377,17 +256,23 @@ def main(args):
     save_trajectory(trajectory, f"{args.outdir}/{args.outdir.split('/')[-1]}.mp4")
 
     print(f"Saving {args.outdir}/rmsd_ca_vs_completeness.png")
-    plot_rmsd_ca_vs_completeness(X_gt, X_ma, X[idx_best][None], mask_gt.cpu(), mask_ma, f"{args.outdir}/rmsd_ca_vs_completeness.png")
+    plot_rmsd_ca_vs_completeness(X_gt, X[idx_best][None], mask_gt.cpu(), f"{args.outdir}/rmsd_ca_vs_completeness.png")
+
+    print(f"Saving {args.outdir}/SAXS_profile.png")
+    particles = X_to_particles(X_full, C_gt, S_gt)
+    model_profile = compute_profile(
+        particles=particles, min_q=exp_profile.min_q_, max_q=exp_profile.max_q_, delta_q=exp_profile.delta_q_, ff_type=FormFactorType.ALL_ATOMS,
+    )
+    profile, chi_square, fitted_params = fit_profile(exp_profile, model_profile, min_c1=0.9, max_c1=1.2, min_c2=-2.0, max_c2=4.0, use_offset=False)
+    plot_SAXS_profile(profile, exp_profile, chi_square, fitted_params, f"{args.outdir}/SAXS_profile.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # required parameters
     parser.add_argument('--outdir', type=str, required=True, help="Path to output directory.")
-    parser.add_argument('--mrc', type=str, required=True, help="Path to density map in the MRC file.")
     parser.add_argument('--dat', type=str, required=True, help="Path to the SAXS data file.")
-    parser.add_argument('--ma-cif', type=str, required=True, help="Path to incomplete model (e.g., ModelAngelo output), in the CIF format.")
-    parser.add_argument('--cif', type=str, required=True, help="Path to deposited CIF file.")
+    parser.add_argument('--pdb', type=str, required=True, help="Path to deposited PDB file.")
 
     # I/O parameters
     parser.add_argument('--remove-oxt', type=int, default=1, help="Flag to ignore terminal oxygen.")
@@ -398,32 +283,19 @@ if __name__ == "__main__":
 
     # optimization parameters
     parser.add_argument('--epochs', type=int, default=4000, help="Number of epochs.")
-    parser.add_argument('--population-size', type=int, default=16, help="Number of atomic models to simultaneously optimize.")
-    parser.add_argument('--lr-model', type=float, default=1e-2, help="Learning rate for the model loss.")
-    parser.add_argument('--rho-model', type=float, default=0.9, help="Momentum for the model loss.")
-    parser.add_argument('--lr-density', type=float, default=1e-2, help="Learning rate for the density loss.")
-    parser.add_argument('--rho-density', type=float, default=0.9, help="Momentum for the density loss.")
+    parser.add_argument('--population-size', type=int, default=1, help="Number of atomic models to simultaneously optimize.")
     parser.add_argument('--lr-sequence', type=float, default=1e-5, help="Learning rate for the sequence loss.")
     parser.add_argument('--rho-sequence', type=float, default=0.9, help="Momentum for the sequence loss.")
     parser.add_argument('--lr-inter-ca', type=float, default=0.0, help="Learning rate for the inter-CA loss.")
     parser.add_argument('--rho-inter-ca', type=float, default=0.9, help="Momentum for the inter-CA loss.")
     parser.add_argument('--lr-profile', type=float, default=1e-2, help="Learning rate for the intensity profile loss.")
     parser.add_argument('--rho-profile', type=float, default=0.9, help="Momentum for the intensity profile loss.")
-    parser.add_argument('--preconditioning-model', type=int, default=1, help="Flag to use preconditioning on the model loss.")
-    parser.add_argument('--normalize-detach', type=int, default=0, help="Normalize Fourier map before computing the density loss.")
-    parser.add_argument('--de-activate-model', type=int, default=-1, help="Number of epochs before de-activating the model loss (-1 to always activate).")
-    parser.add_argument('--activate-density', type=int, default=0, help="Number of epochs before activating density loss.")
     parser.add_argument('--activate-sequence', type=int, default=3000, help="Number of epochs before activating sequence loss.")
 
     # diffusion parameters
     parser.add_argument('--use-diffusion', type=int, default=1, help="Flag to use the diffusion model.")
     parser.add_argument('--temporal-schedule', type=str, default='sqrt', choices=['sqrt', 'linear', 'constant'], help="Type of temporal schedule.")
     parser.add_argument('--t', type=float, default=1.0, help="Initial diffusion time (between 0 and 1).")
-
-    # resolution
-    parser.add_argument('--resolution-cutoff-start', type=float, default=1.5, help="Initial resolution to compute the (Fourier) density maps up to.")
-    parser.add_argument('--resolution-cutoff-end', type=float, default=1.5, help="Final resolution to compute the (Fourier) density maps up to.")
-    parser.add_argument('--activate-resolution-drop', type=int, default=0, help="Number of epochs before changing the resolution.")
 
     # random sampling
     parser.add_argument('--sampling-rate-schedule', type=str, default='constant', choices=['constant', 'linear', 'exp'], help='Type of schedule for the sampling rate.')
@@ -444,9 +316,6 @@ if __name__ == "__main__":
     parser.add_argument('--init-gt', type=int, default=0, help="Flag to initialize the model from the deposited CIF, for debugging purposes.")
     parser.add_argument('--std-dev-init', type=float, default=0.0, help="Intensity of Gaussian random noise added on ground truth.")
     parser.add_argument('--eps-init', type=float, default=0.0, help="Size of initial deviation to ground truth in the direction (1, 1, 1).")
-
-    # other parameters
-    parser.add_argument('--n-voxels-per-batch', type=int, default=1024, help="Number of voxels per batch to avoid OOM when computing full density maps.")
 
     # logging parameters
     parser.add_argument('--log-every', type=int, default=10, help="Frequency (in epochs) for logging.")
