@@ -16,10 +16,12 @@ The current implementation uses [Chroma](https://generatebiomedicines.com/chroma
 
 Start by cloning the repo and, from the main directory, run:
 ```
-conda create adp-3d-env python=3.9
-conda activate adp-3d-env
-pip install -r requirements.txt
-conda install -c conda-forge ffmpeg
+pixi install
+```
+
+This will create the environment with all dependencies (Python 3.9, ffmpeg, and pip packages). Then activate it with:
+```
+pixi shell
 ```
 
 ## Chroma API Key
