@@ -14,12 +14,29 @@ from src.plots import plot_metric, save_trajectory, plot_rmsd_ca_vs_completeness
 from src.cif_utils import ma_cif_to_X
 from src.fft import ifft_density
 from src.pbe_solvers import RealisticSolver
+from src.saxs import SAXSSolver, load_saxs_profile
 
+def get_device():
+    """
+    Get the current device (GPU or CPU) for PyTorch tensors.
+    Returns:
+        torch.device: The current device.
+    """
+    # pick the fastest available device on macOS → MPS, then CUDA, else CPU
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+    return torch.device(device)
 
 def main(args):
     torch.manual_seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+
+    device = get_device()
 
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -41,7 +58,7 @@ def main(args):
     def multiply_covariance(dU, C): return backbone_network.noise_perturb.base_gaussian.multiply_covariance(dU, C)
 
     print("Initializing PBE solver")
-    protein = Protein.from_CIF(args.cif, device='cuda')
+    protein = Protein.from_CIF(args.cif, device=device)
     X_gt, C_gt, S_gt = protein.to_XCS(all_atom=False)  # we use X_gt to compute RMSD
     mask_gt = (C_gt == 1)[0]
     solver = RealisticSolver(
@@ -50,7 +67,7 @@ def main(args):
     delta = solver.origin
     X_gt -= delta  # align X_gt with the density
     density_gt = torch.tensor(solver.density)
-    f_density_gt = ifft_density(density_gt).cuda()
+    f_density_gt = ifft_density(density_gt).to(device)
     n_residues = X_gt.shape[1]
 
     print("Generating full density")
@@ -70,22 +87,27 @@ def main(args):
 
     print("Precomputing preconditioning matrices")
     try:
-        protein = Protein.from_CIF(args.ma_cif, device='cuda')
+        protein = Protein.from_CIF(args.ma_cif, device=device)
         X_ma, C_ma, _ = protein.to_XCS()
         mask_ma = C_ma[0].cpu().reshape(-1) > 0.5
     except ValueError:
         X_ma, mask_boundaries = ma_cif_to_X(args.ma_cif, X_gt.shape[1])
-        X_ma = X_ma.cuda()
+        X_ma = X_ma.to(device)
         mask_ma = mask_boundaries.reshape(-1) > 0.5
     delta = (X_gt[0, mask_ma * mask_gt.cpu()] - X_ma[0, mask_ma * mask_gt.cpu()]).mean(dim=(0, 1))
     X_ma += delta  # align the incomplete model on X_gt (which should be aligned with the density)
     Y = X_ma[:, mask_ma]
 
+    print("Loading experimental SAXS profile")
+    q_exp, I_exp, sigma_exp = load_saxs_profile(args.saxs_dat, device=device)
+    saxs_solver = SAXSSolver(S=S_gt, q_min=q_exp[0].item(), q_max=q_exp[-1].item(),
+                            n_q=len(q_exp), level='atom', device=device)
+
     def mR_fun(z):
         z = z.reshape(-1, n_residues, 4, 3)
         return multiply_R(z, C_gt.expand(z.shape[0], -1))[:, mask_ma].reshape(z.shape[0], -1).permute(1, 0)
 
-    Z = torch.eye(n_residues * 12).cuda()
+    Z = torch.eye(n_residues * 12).to(device)
     mR_mat = mR_fun(Z).cpu().numpy()
 
     U, S, Vh = svd(mR_mat)
@@ -111,6 +133,7 @@ def main(args):
     V_d = torch.zeros_like(Z)
     V_s = torch.zeros_like(Z)
     V_c = torch.zeros_like(Z)
+    V_p = torch.zeros_like(Z)
     
     def sample_chi(X, t=0):
         print("Sampling side chain angles")
@@ -253,6 +276,24 @@ def main(args):
             loss_c = torch.tensor([0.]).float().cuda()
         return grad_Z_c, loss_c
     
+    def get_gradient_Z_p(Z, chi_sample, t, epoch):
+        if args.lr_saxs > 0. and epoch >= args.activate_saxs:
+            with torch.enable_grad():
+                Z.requires_grad_(True)
+                _X = multiply_R(Z, C_gt)
+                # For residue-level: use backbone directly
+                I_computed = saxs_solver.compute_profile(_X, C=C_gt)
+                loss_p, loss_p_per_sample = saxs_solver.compute_loss(
+                    I_computed, I_exp, error=sigma_exp, mode='chi2'
+                )
+                loss_p.backward()
+                grad_Z_p = Z.grad
+            Z.requires_grad_(False)
+        else:
+            grad_Z_p = torch.zeros_like(Z)
+            loss_p = torch.tensor([0.]).cuda()
+        return grad_Z_p, loss_p
+    
     trajectory = [torch.clone(X_gt[:, mask_gt]).detach().cpu().numpy(),
                   torch.clone(Y[:1]).detach().cpu().numpy(),
                   (torch.clone(X).detach().cpu().numpy(), 'initial state')]
@@ -285,7 +326,10 @@ def main(args):
         grad_Z_c, loss_c = get_gradient_Z_c(Z0)
         V_c = args.rho_inter_ca * V_c + args.lr_inter_ca * grad_Z_c
 
-        Z0 = Z0 - V_m - V_d - V_s - V_c
+        grad_Z_p, loss_p = get_gradient_Z_p(Z0, chi_sample, t, epoch)
+        V_p = args.rho_saxs * V_p + args.lr_saxs * grad_Z_p
+
+        Z0 = Z0 - V_m - V_d - V_s - V_c - V_p
 
         # replicate models with lowest density error
         if args.select_best_every > 0 and epoch >= args.activate_replication and epoch % args.select_best_every == 0:
@@ -385,6 +429,7 @@ if __name__ == "__main__":
     parser.add_argument('--mrc', type=str, required=True, help="Path to density map in the MRC file.")
     parser.add_argument('--ma-cif', type=str, required=True, help="Path to incomplete model (e.g., ModelAngelo output), in the CIF format.")
     parser.add_argument('--cif', type=str, required=True, help="Path to deposited CIF file.")
+    parser.add_argument('--saxs-dat', type=str, required=True, help="Path to experimental SAXS profile (in .dat format).")
 
     # I/O parameters
     parser.add_argument('--remove-oxt', type=int, default=1, help="Flag to ignore terminal oxygen.")

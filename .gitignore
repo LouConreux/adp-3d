@@ -13,3 +13,7 @@
 /src/__pycache__/
 
 *.sh
+
+.pixi/*
+!.pixi/config.toml
+*.pixi
